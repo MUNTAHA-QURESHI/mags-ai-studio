@@ -1,20 +1,321 @@
-// This file already exists, but here's the DevOps schema additions
-// Add these models to your existing schema.prisma
+// MAGS AI Studio - Production Prisma Schema
+// This is the MAIN schema file - all models are here
+// Prisma ORM Configuration
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ============================================================================
+// CORE USER & AUTHENTICATION MODELS
+// ============================================================================
+
+model User {
+  id                    String                @id @default(cuid())
+  email                 String                @unique @db.VarChar(255)
+  username              String                @unique @db.VarChar(100)
+  password              String                @db.VarChar(255)
+  firstName             String?               @db.VarChar(100)
+  lastName              String?               @db.VarChar(100)
+  avatar                String?               @db.Text
+  bio                   String?               @db.Text
+  
+  // Status & Verification
+  emailVerified         Boolean               @default(false)
+  emailVerificationToken String?              @unique
+  emailVerificationExpiresAt DateTime?
+  
+  // 2FA
+  twoFactorEnabled      Boolean               @default(false)
+  twoFactorSecret       String?
+  twoFactorBackupCodes  String?               // Encrypted JSON array
+  
+  // Account Status
+  status                UserStatus            @default(ACTIVE)
+  isOnboarded           Boolean               @default(false)
+  
+  // Relationships
+  organizations         UserOrganization[]
+  teams                 TeamMember[]
+  projects              Project[]
+  sessions              UserSession[]
+  activityLogs          ActivityLog[]
+  notifications         Notification[]
+  invitations           Invitation[]
+  generatedApps         GeneratedApp[]
+  deployments           Deployment[]
+  
+  // Metadata
+  lastLoginAt           DateTime?
+  lastActivityAt        DateTime?
+  preferences           UserPreferences?
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  deletedAt             DateTime?
+  
+  @@index([email])
+  @@index([username])
+  @@index([status])
+}
+
+model UserSession {
+  id                    String                @id @default(cuid())
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  token                 String                @unique @db.Text
+  refreshToken          String?               @unique @db.Text
+  
+  userAgent             String?               @db.Text
+  ipAddress             String?               @db.VarChar(45)
+  
+  expiresAt             DateTime
+  revokedAt             DateTime?
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+}
+
+model UserPreferences {
+  id                    String                @id @default(cuid())
+  userId                String                @unique
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  theme                 Theme                 @default(DARK)
+  language              String                @default("en")
+  notifications         NotificationSettings?
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+}
+
+model NotificationSettings {
+  id                    String                @id @default(cuid())
+  preferencesId         String                @unique
+  preferences           UserPreferences       @relation(fields: [preferencesId], references: [id], onDelete: Cascade)
+  
+  emailNotifications    Boolean               @default(true)
+  pushNotifications     Boolean               @default(true)
+  deploymentUpdates     Boolean               @default(true)
+  systemUpdates         Boolean               @default(false)
+  marketingEmails       Boolean               @default(false)
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+}
+
+// ============================================================================
+// ORGANIZATION & TEAM MODELS
+// ============================================================================
+
+model Organization {
+  id                    String                @id @default(cuid())
+  name                  String                @db.VarChar(255)
+  slug                  String                @unique @db.VarChar(255)
+  description           String?               @db.Text
+  logo                  String?               @db.Text
+  
+  // Plan & Billing
+  plan                  Plan                  @default(FREE)
+  billingCycleStart     DateTime?
+  
+  // Settings
+  isPublic              Boolean               @default(false)
+  
+  // Relationships
+  members               UserOrganization[]
+  teams                 Team[]
+  projects              Project[]
+  invitations           Invitation[]
+  subscriptions         Subscription[]
+  paymentMethods        PaymentMethod[]
+  invoices              Invoice[]
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  deletedAt             DateTime?
+  
+  @@index([slug])
+  @@index([plan])
+}
+
+model UserOrganization {
+  id                    String                @id @default(cuid())
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  organizationId        String
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  role                  OrgRole               @default(MEMBER)
+  status                MemberStatus          @default(ACTIVE)
+  
+  joinedAt              DateTime              @default(now())
+  
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Team {
+  id                    String                @id @default(cuid())
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
+  
+  organizationId        String
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  members               TeamMember[]
+  projects              Project[]
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([organizationId])
+}
+
+model TeamMember {
+  id                    String                @id @default(cuid())
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  teamId                String
+  team                  Team                  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  
+  role                  TeamRole              @default(MEMBER)
+  status                MemberStatus          @default(ACTIVE)
+  
+  joinedAt              DateTime              @default(now())
+  
+  @@unique([userId, teamId])
+  @@index([teamId])
+}
+
+// ============================================================================
+// PROJECT & APPLICATION MODELS
+// ============================================================================
+
+model Project {
+  id                    String                @id @default(cuid())
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
+  
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  organizationId        String?
+  organization          Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  
+  teamId                String?
+  team                  Team?                 @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  
+  // Project Status
+  status                ProjectStatus         @default(ACTIVE)
+  visibility            Visibility            @default(PRIVATE)
+  
+  // Relationships
+  generatedApps         GeneratedApp[]
+  deployments           Deployment[]
+  environments          EnvironmentConfig[]
+  files                 ProjectFile[]
+  pipelines             DeploymentPipeline[]
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([userId])
+  @@index([organizationId])
+  @@index([teamId])
+}
+
+model GeneratedApp {
+  id                    String                @id @default(cuid())
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
+  
+  projectId             String
+  project               Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // App Details
+  type                  AppType
+  framework             String                @db.VarChar(100)
+  language              String                @db.VarChar(100)
+  
+  // Source
+  sourceCode            String?               @db.Text
+  configJson            Json?
+  
+  // Status
+  status                AppStatus             @default(DRAFT)
+  
+  // Relationships
+  deployments           Deployment[]
+  buildJobs             BuildJob[]
+  files                 ProjectFile[]
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([projectId])
+  @@index([userId])
+  @@index([status])
+}
+
+model ProjectFile {
+  id                    String                @id @default(cuid())
+  name                  String                @db.VarChar(255)
+  path                  String                @db.Text
+  
+  projectId             String
+  project               Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  appId                 String?
+  app                   GeneratedApp?         @relation(fields: [appId], references: [id], onDelete: Cascade)
+  
+  content               String?               @db.Text
+  size                  BigInt?
+  mimeType              String?               @db.VarChar(100)
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([projectId])
+  @@index([appId])
+}
+
+// ============================================================================
+// DEPLOYMENT & INFRASTRUCTURE MODELS
+// ============================================================================
 
 model Deployment {
   id                    String                @id @default(cuid())
   projectId             String
   project               Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   
-  name                  String
-  description           String?
-  version               String
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  appId                 String?
+  app                   GeneratedApp?         @relation(fields: [appId], references: [id], onDelete: SetNull)
+  
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
+  version               String                @db.VarChar(50)
   
   status                DeploymentStatus      @default(PENDING)
   environment           Environment           @default(STAGING)
-  
-  appId                 String?
-  generatedApp          GeneratedApp?         @relation(fields: [appId], references: [id])
   
   pipelineId            String?
   pipeline              DeploymentPipeline?   @relation(fields: [pipelineId], references: [id])
@@ -22,30 +323,32 @@ model Deployment {
   targetType            DeploymentTarget      @default(DOCKER)
   targetConfig          Json                  // Dynamic config based on target type
   
+  // Relationships
   deploymentSteps       DeploymentStep[]
   jobs                  BuildJob[]
+  logs                  DeploymentLog[]
+  metrics               DeploymentMetric[]
   
+  // Timeline
   startedAt             DateTime?
   completedAt           DateTime?
   failedAt              DateTime?
   
-  // Rollback info
+  // Rollback
   previousDeploymentId  String?
   canRollback           Boolean               @default(true)
   
-  // Monitoring
-  healthCheckInterval   Int                   @default(300000) // 5 minutes
+  // Health Check
+  healthCheckInterval   Int                   @default(300000)
   lastHealthCheckAt     DateTime?
   healthStatus          HealthStatus          @default(UNKNOWN)
   
-  logs                  DeploymentLog[]
-  metrics               DeploymentMetric[]
-  
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
-  createdBy             String
   
   @@index([projectId])
+  @@index([userId])
+  @@index([appId])
   @@index([status])
   @@index([environment])
 }
@@ -55,15 +358,14 @@ model DeploymentPipeline {
   projectId             String
   project               Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   
-  name                  String
-  description           String?
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
   
   stages                PipelineStage[]
+  deployments           Deployment[]
   
   isActive              Boolean               @default(true)
   isDefault             Boolean               @default(false)
-  
-  deployments           Deployment[]
   
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
@@ -76,18 +378,18 @@ model PipelineStage {
   pipelineId            String
   pipeline              DeploymentPipeline    @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   
-  name                  String
-  description           String?
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
   order                 Int
   
   type                  StageType
-  config                Json                  // Stage-specific config
+  config                Json
   
-  timeout               Int                   @default(3600000) // 1 hour
+  timeout               Int                   @default(3600000)
   retryCount            Int                   @default(0)
   skipOnFailure         Boolean               @default(false)
   
-  conditions            String?               // Conditional execution
+  conditions            String?               @db.Text
   
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
@@ -102,18 +404,19 @@ model DeploymentStep {
   deployment            Deployment            @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
   
   stageId               String?
-  stageName             String
+  stageName             String                @db.VarChar(255)
   
   status                StepStatus            @default(PENDING)
   
   startedAt             DateTime?
   completedAt           DateTime?
-  duration              Int?                  // milliseconds
+  duration              Int?
   
-  logs                  String?               // First 10MB of logs
-  error                 String?
-  
+  logs                  String?               @db.Text
+  error                 String?               @db.Text
   output                Json?
+  
+  createdAt             DateTime              @default(now())
   
   @@index([deploymentId])
   @@index([status])
@@ -125,28 +428,28 @@ model BuildJob {
   deployment            Deployment?           @relation(fields: [deploymentId], references: [id], onDelete: SetNull)
   
   appId                 String?
-  generatedApp          GeneratedApp?         @relation(fields: [appId], references: [id])
+  app                   GeneratedApp?         @relation(fields: [appId], references: [id], onDelete: SetNull)
   
-  name                  String
-  
+  name                  String                @db.VarChar(255)
   buildType             BuildType             @default(DOCKER)
   status                BuildStatus           @default(PENDING)
   
-  artifacts             BuildArtifact[]
+  // Build context
+  sourceUrl             String                @db.Text
+  branch                String                @default("main")
+  commitSha             String?               @db.VarChar(100)
   
+  buildConfig           Json
+  environment           Json
+  
+  // Relationships
+  artifacts             BuildArtifact[]
+  logs                  DeploymentLog[]
+  
+  // Timeline
   startedAt             DateTime?
   completedAt           DateTime?
   duration              Int?
-  
-  // Build context
-  sourceUrl             String                // Git URL or artifact source
-  branch                String                @default("main")
-  commitSha             String?
-  
-  buildConfig           Json                  // Build-specific config
-  environment           Json                  // Build-time env vars
-  
-  logs                  DeploymentLog[]
   
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
@@ -161,13 +464,12 @@ model BuildArtifact {
   jobId                 String
   job                   BuildJob              @relation(fields: [jobId], references: [id], onDelete: Cascade)
   
-  name                  String
-  type                  ArtifactType          // DOCKER_IMAGE, BINARY, etc.
-  size                  BigInt                // bytes
+  name                  String                @db.VarChar(255)
+  type                  ArtifactType
+  size                  BigInt
   
-  location              String                // S3 path, Docker registry, etc.
-  checksum              String                // SHA256
-  
+  location              String                @db.Text
+  checksum              String                @db.VarChar(100)
   metadata              Json?
   
   createdAt             DateTime              @default(now())
@@ -176,17 +478,21 @@ model BuildArtifact {
   @@index([type])
 }
 
+// ============================================================================
+// ENVIRONMENT & CONFIGURATION MODELS
+// ============================================================================
+
 model EnvironmentConfig {
   id                    String                @id @default(cuid())
   projectId             String
   project               Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   
   environment           Environment
+  description           String?               @db.Text
   
+  // Relationships
   variables             EnvironmentVariable[]
   secrets               EnvironmentSecret[]
-  
-  description           String?
   
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
@@ -200,9 +506,8 @@ model EnvironmentVariable {
   configId              String
   config                EnvironmentConfig     @relation(fields: [configId], references: [id], onDelete: Cascade)
   
-  key                   String
-  value                 String
-  
+  key                   String                @db.VarChar(255)
+  value                 String                @db.Text
   isEncrypted           Boolean               @default(false)
   
   createdAt             DateTime              @default(now())
@@ -217,40 +522,37 @@ model EnvironmentSecret {
   configId              String
   config                EnvironmentConfig     @relation(fields: [configId], references: [id], onDelete: Cascade)
   
-  key                   String
-  encryptedValue        String                // Encrypted with app key
-  
-  metadata              Json?                 // IV, salt, etc.
+  key                   String                @db.VarChar(255)
+  encryptedValue        String                @db.Text
+  metadata              Json?
   
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
-  auditLog              String?               // Who accessed when
+  auditLog              String?               @db.Text
   
   @@unique([configId, key])
   @@index([configId])
 }
 
+// ============================================================================
+// INFRASTRUCTURE & MONITORING MODELS
+// ============================================================================
+
 model InfrastructureTemplate {
   id                    String                @id @default(cuid())
   
-  name                  String
-  description           String?
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
   
-  type                  InfraType             // NODE, NEXTJS, NESTJS, etc.
-  targetType            DeploymentTarget      // VPS, DOCKER, K8S, etc.
+  type                  InfraType
+  targetType            DeploymentTarget
   
-  config                Json                  // Template config
+  config                Json
+  kubernetesManifest    String?               @db.Text
+  dockerCompose         String?               @db.Text
+  setupScript           String?               @db.Text
   
-  // For K8s
-  kubernetesManifest    String?               // YAML manifest
-  
-  // For Docker
-  dockerCompose         String?               // docker-compose.yml
-  
-  // For VPS
-  setupScript           String?               // Bash script
-  
-  // Auto-scaling config
+  // Auto-scaling
   minReplicas           Int                   @default(1)
   maxReplicas           Int                   @default(3)
   targetCpuUtilization  Int                   @default(70)
@@ -273,8 +575,7 @@ model DeploymentLog {
   
   level                 LogLevel              @default(INFO)
   message               String                @db.Text
-  
-  stepName              String?
+  stepName              String?               @db.VarChar(255)
   
   timestamp             DateTime              @default(now())
   
@@ -288,9 +589,9 @@ model DeploymentMetric {
   deploymentId          String
   deployment            Deployment            @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
   
-  metric                String                // cpu, memory, requests, etc.
+  metric                String                @db.VarChar(100)
   value                 Float
-  unit                  String                // %, MB, ms, etc.
+  unit                  String                @db.VarChar(50)
   
   timestamp             DateTime              @default(now())
   
@@ -299,7 +600,209 @@ model DeploymentMetric {
   @@index([timestamp])
 }
 
+// ============================================================================
+// BILLING & SUBSCRIPTION MODELS
+// ============================================================================
+
+model Subscription {
+  id                    String                @id @default(cuid())
+  organizationId        String
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  stripeSubscriptionId  String?               @unique
+  plan                  Plan                  @default(FREE)
+  status                SubscriptionStatus    @default(ACTIVE)
+  
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  
+  cancelledAt           DateTime?
+  invoices              Invoice[]
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([organizationId])
+  @@index([stripeSubscriptionId])
+}
+
+model Invoice {
+  id                    String                @id @default(cuid())
+  subscriptionId        String
+  subscription          Subscription          @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  
+  organizationId        String
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  stripeInvoiceId       String?               @unique
+  amount                Int
+  currency              String                @default("USD")
+  status                InvoiceStatus         @default(DRAFT)
+  
+  paidAt                DateTime?
+  dueDate               DateTime?
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([subscriptionId])
+  @@index([organizationId])
+}
+
+model PaymentMethod {
+  id                    String                @id @default(cuid())
+  organizationId        String
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  stripePaymentMethodId String?               @unique
+  type                  String                @db.VarChar(50)
+  last4                 String?               @db.VarChar(4)
+  
+  isDefault             Boolean               @default(false)
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  
+  @@index([organizationId])
+}
+
+// ============================================================================
+// COLLABORATION MODELS
+// ============================================================================
+
+model Invitation {
+  id                    String                @id @default(cuid())
+  email                 String                @db.VarChar(255)
+  
+  userId                String?
+  user                  User?                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  organizationId        String
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  role                  OrgRole               @default(MEMBER)
+  status                InvitationStatus      @default(PENDING)
+  
+  expiresAt             DateTime
+  acceptedAt            DateTime?
+  
+  createdAt             DateTime              @default(now())
+  
+  @@index([email])
+  @@index([organizationId])
+  @@index([status])
+}
+
+model ActivityLog {
+  id                    String                @id @default(cuid())
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  action                String                @db.VarChar(255)
+  resourceType          String                @db.VarChar(100)
+  resourceId            String                @db.VarChar(255)
+  
+  metadata              Json?
+  ipAddress             String?               @db.VarChar(45)
+  userAgent             String?               @db.Text
+  
+  createdAt             DateTime              @default(now())
+  
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id                    String                @id @default(cuid())
+  userId                String
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type                  NotificationType
+  title                 String                @db.VarChar(255)
+  message               String                @db.Text
+  
+  metadata              Json?
+  read                  Boolean               @default(false)
+  readAt                DateTime?
+  
+  createdAt             DateTime              @default(now())
+  
+  @@index([userId])
+  @@index([read])
+}
+
+// ============================================================================
 // ENUMS
+// ============================================================================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum Theme {
+  LIGHT
+  DARK
+  AUTO
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum TeamRole {
+  LEAD
+  MEMBER
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  INVITED
+  PENDING
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum Visibility {
+  PRIVATE
+  INTERNAL
+  PUBLIC
+}
+
+enum AppType {
+  NEXTJS
+  REACT
+  NESTJS
+  NODEJS
+  PYTHON
+  OTHER
+}
+
+enum AppStatus {
+  DRAFT
+  GENERATED
+  TESTING
+  DEPLOYED
+  ARCHIVED
+}
+
 enum DeploymentStatus {
   PENDING
   BUILDING
@@ -310,6 +813,7 @@ enum DeploymentStatus {
   SUCCESS
   FAILED
   ROLLED_BACK
+  CANCELLED
 }
 
 enum DeploymentTarget {
@@ -386,4 +890,39 @@ enum LogLevel {
   WARN
   ERROR
   CRITICAL
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  PENDING
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OPEN
+  VOID
+  UNCOLLECTIBLE
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+enum NotificationType {
+  DEPLOYMENT_SUCCESS
+  DEPLOYMENT_FAILED
+  DEPLOYMENT_STARTED
+  BUILD_FAILED
+  BUILD_SUCCESS
+  INVITATION
+  TEAM_UPDATE
+  SYSTEM_ALERT
+  PROJECT_SHARED
 }
